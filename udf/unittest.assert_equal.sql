@@ -20,12 +20,27 @@ begin
 					else 'unittest.assert_equals fail: ' + isnull(convert(varchar(8000), @thing1), '<NULL>') + ' != ' + isnull(convert(varchar(8000), @thing2), '<NULL>')
 					end
 				when @thing1 <> @thing2 then
-					'unittest.assert_equals fail: '
-					+ convert(varchar(8000), @thing1)
-					+ '::' + convert(varchar(250), sql_variant_property(@thing1, 'BaseType'))
-					+ ' != '
-					+ convert(varchar(8000), @thing2)
-					+ '::' + convert(varchar(250), sql_variant_property(@thing2, 'BaseType'))
+					case
+						when sql_variant_property(@thing1, 'BaseType') <> sql_variant_property(@thing2, 'BaseType') then
+							'unittest.assert_equals fail: '
+							+ convert(varchar(8000), @thing1)
+							+ '::' + convert(varchar(250), sql_variant_property(@thing1, 'BaseType'))
+							+ ' != '
+							+ convert(varchar(8000), @thing2)
+							+ '::' + convert(varchar(250), sql_variant_property(@thing1, 'BaseType'))
+						when sql_variant_property(@thing1, 'Collation') <> sql_variant_property(@thing2, 'Collation') then
+							'unittest.assert_equals fail: '
+							+ convert(varchar(8000), @thing1)
+							+ ' collate ' + convert(varchar(250), sql_variant_property(@thing1, 'Collation'))
+							+ ' != '
+							+ convert(varchar(8000), @thing2)
+							+ ' collate ' + convert(varchar(250), sql_variant_property(@thing2, 'Collation'))
+						else
+							'unittest.assert_equals fail: '
+							+ convert(varchar(8000), @thing1)
+							+ ' != '
+							+ convert(varchar(8000), @thing2)
+						end
 				else null
 			end
 	return @result
@@ -45,5 +60,8 @@ from (
 	union all select convert(float, 10.0), convert(decimal(10, 2), 10), 0
 	union all select 10, '10', 0
 	union all select convert(nvarchar(50), 'abc'), convert(varchar(50), 'ABC'), 1
+	union all select 'abc', 'ABC', 1
+	union all select 'abc' collate Latin1_General_CS_AS, 'abc' collate Latin1_General_CS_AS, 1
+	union all select 'abc' collate Latin1_General_CS_AS, 'ABC', 0
 ) a
 where case when unittest.assert_equals(a.input1, a.input2) is null then 1 else 0 end <> a.same
