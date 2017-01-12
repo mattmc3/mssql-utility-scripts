@@ -17,7 +17,7 @@ select db_name()                as table_catalog
       ,c.name                   as constraint_name
       ,c.type                   as constraint_type
 from sys.objects c
-join sys.tables t  on t.object_id = c.parent_object_id  
+join sys.tables t  on t.object_id = c.parent_object_id
 where c.type in ('C' ,'UQ' ,'PK' ,'F')
 
 go
