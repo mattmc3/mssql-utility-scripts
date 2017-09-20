@@ -1,0 +1,12 @@
+[submodule "third_party/sql-server-maintenance-solution"]
+	path = third_party/sql-server-maintenance-solution
+	url = git@github.com:olahallengren/sql-server-maintenance-solution.git
+[submodule "third_party/SQL-Server-First-Responder-Kit"]
+	path = third_party/SQL-Server-First-Responder-Kit
+	url = git@github.com:BrentOzarULTD/SQL-Server-First-Responder-Kit.git
+[submodule "third_party/BrentOzarULTD/SQL-Server-First-Responder-Kit"]
+	path = third_party/BrentOzarULTD/SQL-Server-First-Responder-Kit
+	url = git@github.com:BrentOzarULTD/SQL-Server-First-Responder-Kit.git
+[submodule "third_party/olahallengren/sql-server-maintenance-solution"]
+	path = third_party/olahallengren/sql-server-maintenance-solution
+	url = git@github.com:olahallengren/sql-server-maintenance-solution.git
