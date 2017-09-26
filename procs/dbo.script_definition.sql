@@ -13,22 +13,31 @@ go
 --                  - ALTER
 --                  - DROP
 --                  - DROP AND CREATE
+--                  - CREATE OR ALTER
 --------------------------------------------------------------------------------
---create or alter proc script_definition
---    @database_name nvarchar(128)
---    ,@script_type nvarchar(100)
---    ,@object_schema nvarchar(128) = null
---    ,@object_name nvarchar(128) = null
---as
---begin
+create or alter proc [dbo].[script_definition]
+    @database_name nvarchar(128)
+    ,@script_type nvarchar(100)
+    ,@object_schema nvarchar(128) = null
+    ,@object_name nvarchar(128) = null
+    ,@tab_replacement varchar(10) = null
+as
+begin
 
 set nocount on
 
 -- Temporarily uncomment for inline testing
-declare @database_name nvarchar(128) = 'outcomes_mart'
-      , @script_type nvarchar(100) = 'drop and create'
-      , @object_schema nvarchar(128) = null
-      , @object_name nvarchar(128) = null
+--declare @database_name nvarchar(128) = 'master'
+--      , @script_type nvarchar(100) = 'drop and create'
+--      , @object_schema nvarchar(128) = null
+--      , @object_name nvarchar(128) = null
+
+if @script_type not in ('CREATE', 'DROP', 'DROP AND CREATE', 'CREATE OR ALTER') begin
+    raiserror('The @script_type values supported are ''CREATE'', ''DROP'', ''DROP AND CREATE'', and ''CREATE OR ALTER''', 16, 10)
+    return
+end
+
+set @tab_replacement = isnull(@tab_replacement, char(9))
 
 declare @sql nvarchar(max)
       , @has_drop bit = 0
@@ -47,92 +56,67 @@ if @script_type in ('drop') begin
 end
 
 
--- get view information ========================================================
--- via sp_helptext 'information_schema.views' in master
-drop table if exists ##__script_definition__view_info
-select *
-into ##__script_definition__view_info
-from (
-    select top 2147483647
-           db_name() as table_catalog
-         , schema_name(schema_id) as table_schema
-         , name as table_name
-         , convert(varchar(7), case with_check_option when 1 then 'CASCADE' else 'NONE' end) as check_option
-      from sys.views
-      order by 1, 2, 3
-) a where 1 = 0
+-- get definitions ============================================================
+declare @defs table (
+    object_id int not null
+    ,object_catalog nvarchar(128) not null
+    ,object_schema nvarchar(128) not null
+    ,object_name nvarchar(128) not null
+    ,quoted_name nvarchar(500) not null
+    ,object_definition nvarchar(max) null
+    ,uses_ansi_nulls bit null
+    ,uses_quoted_identifier bit null
+    ,is_schema_bound bit null
+    ,object_type_code char(2) null
+    ,object_type varchar(10) not null
+    ,object_language varchar(10) not null
+)
+
 set @sql = 'use ' + quotename(@database_name) + '
-insert into ##__script_definition__view_info
-select *
-from (
-    select top 2147483647
-           db_name() as table_catalog
-         , schema_name(schema_id) as table_schema
-         , name as table_name
-         , convert(varchar(7), case with_check_option when 1 then ''CASCADE'' else ''NONE'' end) as check_option
-      from sys.views
-      order by 1, 2, 3
-) a
+select so.object_id as object_id
+     , db_name() as object_catalog
+     , schema_name(so.schema_id) as object_schema
+     , so.name as object_name
+     , quotename(schema_name(so.schema_id)) + ''.'' + quotename(so.name) as quoted_name
+     , sm.definition as object_definition
+     , sm.uses_ansi_nulls
+     , sm.uses_quoted_identifier
+     , sm.is_schema_bound
+     , so.type as object_type_code
+     , case when so.type in (''V'') then ''VIEW''
+            when so.type in (''P'', ''PC'') then ''PROCEDURE''
+            else ''FUNCTION''
+       end as object_type
+     , case when so.type in (''V'', ''P'', ''FN'', ''TF'', ''IF'') then ''SQL''
+            else ''EXTERNAL''
+       end as object_language
+from sys.objects so
+left join sys.sql_modules sm
+  on sm.object_id = so.object_id
+where so.type in (''V'', ''P'', ''FN'', ''TF'', ''IF'', ''AF'', ''FT'', ''IS'', ''PC'', ''FS'')
+order by 1, 2, 3
 '
-exec(@sql)
-drop table if exists #view_info
-select *, quotename(table_schema) + '.' + quotename(table_name) as quoted_name
-into #view_info
-from ##__script_definition__view_info
-drop table if exists ##__script_definition__view_info
 
+insert into @defs
+exec sp_executesql @sql
 
--- get routine information =====================================================
--- via sp_helptext 'information_schema.routines' in master
-drop table if exists ##__script_definition__routine_info
-select *
-into ##__script_definition__routine_info
-from (
-    select top 2147483647
-           db_name() as routine_catalog
-         , schema_name(o.schema_id) as routine_schema
-         , o.name as routine_name
-         , convert(nvarchar(20), case when o.type in ('P','PC') then 'PROCEDURE' else 'FUNCTION' end) as routine_type
-         , convert(nvarchar(30), case when o.type in ('P ', 'FN', 'TF', 'IF') then 'SQL' else 'EXTERNAL' end) as routine_body
-         , o.create_date as created
-         , o.modify_date as last_altered
-    from sys.objects o
-    left join sys.parameters c
-        on c.object_id = o.object_id and c.parameter_id = 0
-    where o.type in ('P', 'FN', 'TF', 'IF', 'AF', 'FT', 'IS', 'PC', 'FS')
-    order by 1, 2, 3
-) a
-where 1 = 0
-set @sql = 'use ' + quotename(@database_name) + '
-insert into ##__script_definition__routine_info
-select *
-from (
-    select top 2147483647
-           db_name() as routine_cataloga
-         , schema_name(o.schema_id) as routine_schema
-         , o.name as routine_name
-         , convert(nvarchar(20), case when o.type in (''P'',''PC'') then ''PROCEDURE'' else ''FUNCTION'' end) as routine_type
-         , convert(nvarchar(30), case when o.type in (''P '', ''FN'', ''TF'', ''IF'') then ''SQL'' else ''EXTERNAL'' end) as routine_body
-         , o.create_date as created
-         , o.modify_date as last_altered
-    from sys.objects o
-    left join sys.parameters c
-        on c.object_id = o.object_id and c.parameter_id = 0
-    where o.type in (''P'', ''FN'', ''TF'', ''IF'', ''AF'', ''FT'', ''IS'', ''PC'', ''FS'')
-    order by 1, 2, 3
-) a
-'
-exec(@sql)
-drop table if exists #routine_info
-select *, quotename(routine_schema) + '.' + quotename(routine_name) as quoted_name
-into #routine_info
-from ##__script_definition__routine_info
-drop table if exists ##__script_definition__routine_info
+-- whittle down
+delete from @defs
+where (@object_schema is not null and object_schema <> @object_schema)
+or (@object_name is not null and object_name <> @object_name)
 
+-- standardize on newlines for split
+update @defs
+set object_definition = replace(object_definition, char(13) + char(10), char(10))
+
+-- standardize tabs
+if @tab_replacement <> char(9) begin
+    update @defs
+    set object_definition = replace(object_definition, char(9), @tab_replacement)
+end
 
 -- result ======================================================================
-drop table if exists #result
-create table #result (
+declare @result table (
     object_catalog nvarchar(128)
     ,object_schema nvarchar(128)
     ,object_name nvarchar(128)
@@ -141,31 +125,9 @@ create table #result (
     ,ddl nvarchar(max)
 )
 
-drop table if exists #objects
-select *
-into #objects
-from (
-    select table_catalog as obj_catalog
-         , table_schema as obj_schema
-         , table_name as obj_name
-         , 'VIEW' as obj_type
-         , quoted_name
-    from #view_info
-    union all
-    select routine_catalog as obj_catalog
-         , routine_schema as obj_schema
-         , routine_name as obj_name
-         , routine_type as obj_type
-         , quoted_name
-    from #routine_info r
-    where r.routine_body = 'SQL'
-) a
-where (@object_schema is null or obj_schema = @object_schema)
-and (@object_name is null or obj_name = @object_name)
-
 
 -- header ======================================================================
-insert into #result (
+insert into @result (
     object_catalog
     ,object_schema
     ,object_name
@@ -174,17 +136,17 @@ insert into #result (
     ,ddl
 )
 select
-    a.obj_catalog
-    ,a.obj_schema
-    ,a.obj_name
-    ,a.obj_type
+    a.object_catalog
+    ,a.object_schema
+    ,a.object_name
+    ,a.object_type
     ,100000000 + b.seq
     ,case b.seq
-        when 1 then 'USE ' + quotename(a.obj_catalog)
+        when 1 then 'USE ' + quotename(a.object_catalog)
         when 2 then 'GO'
         when 3 then ''
     end as ddl
-from #objects a
+from @defs a
 cross apply (select 1 as seq union
              select 2 union
              select 3) b
@@ -192,7 +154,7 @@ cross apply (select 1 as seq union
 
 -- drops =======================================================================
 if @has_drop = 1 begin
-    insert into #result (
+    insert into @result (
         object_catalog
         ,object_schema
         ,object_name
@@ -201,122 +163,88 @@ if @has_drop = 1 begin
         ,ddl
     )
     select
-        a.obj_catalog
-        ,a.obj_schema
-        ,a.obj_name
-        ,a.obj_type
+        a.object_catalog
+        ,a.object_schema
+        ,a.object_name
+        ,a.object_type
         ,200000000 + b.seq
         ,case b.seq
             when 1 then '/****** Object:  ' +
-                case a.obj_type
+                case a.object_type
                     when 'VIEW' then 'View'
                     when 'PROCEDURE' then 'StoredProcedure'
                     when 'FUNCTION' then 'UserDefinedFunction'
                     else ''
                 end + ' ' + a.quoted_name + '    Script Date: ' + format(getdate(), 'M/d/yyyy h:mm:ss tt') + ' ******/'
-            when 2 then 'DROP ' + a.obj_type + ' ' + a.quoted_name
+            when 2 then 'DROP ' + a.object_type + ' ' + a.quoted_name
             when 3 then 'GO'
             when 4 then ''
         end as ddl
-    from #objects a
+    from @defs a
     cross apply (select 1 as seq union
                  select 2 union
                  select 3 union
                  select 4) b
 end
 
-
--- definition ==================================================================
+-- Parse DDL into one record per line ==========================================
+-- I could use string_split but the documentation does not specify that order is
+-- preserved, and that is crucial to this parse. Also, string_split is 2016+.
 if @has_definition = 1 begin
-    drop table if exists ##__script_definition__def
-    create table ##__script_definition__def (
-        seq int identity(1,1)
-        ,ddl nvarchar(max)
+    declare @ddl_parse table (
+        object_id int
+        ,seq int
+        ,start_idx int
+        ,end_idx int
     )
 
-    declare @obj_catalog nvarchar(128)
-          , @obj_schema nvarchar(128)
-          , @obj_name nvarchar(128)
-          , @obj_type nvarchar(128)
-          , @quoted_name nvarchar(500)
-          , @ddl nvarchar(max)
-
-    declare @ddl_combined table (
-        ddl nvarchar(max)
-    )
-
-    drop table if exists #ddl_lines
-    create table #ddl_lines (
-        seq int identity(1,1)
-        ,ddl nvarchar(max)
-    )
-
-    declare @cur cursor
-    set @cur = cursor local fast_forward for
-        select obj_catalog, obj_schema, obj_name, obj_type, quoted_name
-        from #objects
-        order by 1, 2
-    open @cur
-
-    fetch next from @cur into @obj_catalog, @obj_schema, @obj_name, @obj_type, @quoted_name
-    while @@fetch_status = 0 begin
-        truncate table ##__script_definition__def
-        set @sql = 'use ' + quotename(@database_name) + '
-    insert into ##__script_definition__def (ddl)
-    exec sp_helptext ''' + @quoted_name + ''''
-        exec(@sql)
-
-        -- sp_help text makes each line 256 characters long, and splits on crlf (\r\n),
-        -- but if your definition uses just newlines (\n), then it mashes everything
-        -- together. This part normalizes to \n, combines the script into a variable,
-        -- puts that variable in a table so that we can cross apply with a string_split
-        -- on the newline, and leverages an identity to preserve the order.
-        update ##__script_definition__def
-        set ddl = replace(ddl, char(13) + char(10), char(10))
-
-        -- combine into variable
-        set @ddl = ''
-        select @ddl = @ddl + ddl
-        from ##__script_definition__def
-        order by seq
-
-        -- put variable into table
-        delete from @ddl_combined
-        insert into @ddl_combined (ddl)
-        select @ddl
-
-        -- split script back out into proper lines
-        truncate table #ddl_lines
-        insert into #ddl_lines (ddl)
-        select ca.value
-        from @ddl_combined
-        cross apply string_split(ddl, char(10)) ca
-
-        insert into #result (
-            object_catalog
-            ,object_schema
-            ,object_name
-            ,object_type
+    declare @rc int = -1
+    declare @seq int = 1
+    while @rc <> 0 begin
+        insert into @ddl_parse (
+            object_id
             ,seq
-            ,ddl
+            ,start_idx
+            ,end_idx
         )
-        select
-            @obj_catalog
-            ,@obj_schema
-            ,@obj_name
-            ,@obj_type
-            ,seq + 500000000  -- start with a high sequence so that we can add sql
-            ,ddl
-        from #ddl_lines
-        order by seq
+        select 
+            d.object_id
+            ,@seq as seq
+            ,isnull(p.end_idx, 0) + 1 as start_idx
+            ,isnull(nullif(charindex(char(10), d.object_definition, isnull(p.end_idx, 0) + 1), 0), len(d.object_definition) + 1) as end_idx
+        from @defs d
+        left join @ddl_parse p
+            on d.object_id = p.object_id
+            and p.seq = @seq - 1
+        where @seq = 1
+           or p.end_idx <= len(d.object_definition)
 
-        fetch next from @cur into @obj_catalog, @obj_schema, @obj_name, @obj_type, @quoted_name
+        set @rc = @@rowcount
+        set @seq = @seq + 1
     end
-    drop table if exists ##__script_definition__def
 
+    -- Add DDL lines to result =================================================
+    insert into @result (
+        object_catalog
+        ,object_schema
+        ,object_name
+        ,object_type
+        ,seq
+        ,ddl
+    )
+    select d.object_catalog
+         , d.object_schema
+         , d.object_name
+         , d.object_type
+         , p.seq + 500000000  -- start with a high sequence so that we can add header/footer sql
+         , substring(d.object_definition, p.start_idx, p.end_idx - p.start_idx) as ddl
+    from @defs d
+    join @ddl_parse p
+            on d.object_id = p.object_id
+    order by d.object_id, p.seq
 
     -- Wrap the SQL statements with boiler plate ===============================
-    insert into #result (
+    insert into @result (
         object_catalog
         ,object_schema
         ,object_name
@@ -325,14 +253,14 @@ if @has_definition = 1 begin
         ,ddl
     )
     select
-        a.obj_catalog
-        ,a.obj_schema
-        ,a.obj_name
-        ,a.obj_type
+        a.object_catalog
+        ,a.object_schema
+        ,a.object_name
+        ,a.object_type
         ,300000000 + b.seq
         ,case b.seq
             when 1 then '/****** Object:  ' +
-                case a.obj_type
+                case a.object_type
                     when 'VIEW' then 'View'
                     when 'PROCEDURE' then 'StoredProcedure'
                     when 'FUNCTION' then 'UserDefinedFunction'
@@ -345,7 +273,7 @@ if @has_definition = 1 begin
             when 6 then 'GO'
             when 7 then ''
         end as ddl
-        from #objects a
+        from @defs a
         cross apply (select 1 as seq union
                      select 2 union
                      select 3 union
@@ -354,7 +282,7 @@ if @has_definition = 1 begin
                      select 6 union
                      select 7) b
 
-        insert into #result (
+        insert into @result (
             object_catalog
             ,object_schema
             ,object_name
@@ -363,29 +291,42 @@ if @has_definition = 1 begin
             ,ddl
         )
         select
-            a.obj_catalog
-            ,a.obj_schema
-            ,a.obj_name
-            ,a.obj_type
+            a.object_catalog
+            ,a.object_schema
+            ,a.object_name
+            ,a.object_type
             ,800000000 + b.seq
             ,case b.seq
                 when 1 then 'GO'
                 when 2 then ''
             end as ddl
-        from #objects a
+        from @defs a
         cross apply (select 1 as seq union
                      select 2) b
 end
 
+-- Fix the create statement ====================================================
+if @script_type in ('alter', 'create or alter') begin
+    ;with cte as (
+        select *
+             , row_number() over (partition by object_schema, object_name
+                                  order by seq) as rn
+        from (
+            select *
+                 , patindex('%create%' + case when object_type = 'PROCEDURE' then 'PROC' else object_type end + '%' + object_schema + '%.%' + object_name + '%', ddl) as create_idx
+            from @result
+        ) a
+        where create_idx > 0
+    )
+    update cte
+    set ddl = stuff(ddl, create_idx, 6, @script_type)
+    where rn = 1
+end
+
 -- Return the result data ======================================================
 select *
-from #result r
+from @result r
 order by 1, 2, 3, 4, 5
 
---end
---go
-
---exec master.dbo.script_definition 'outcomes_mart', 'drop'
---exec master.dbo.script_definition 'outcomes_mart', 'create', @object_name = 'regex_matches'
---exec master.dbo.script_definition 'outcomes_mart', 'drop and create'
-
+end
+go
