@@ -3,7 +3,7 @@ go
 --------------------------------------------------------------------------------
 -- Proc:        script_definition
 -- Author:      mattmc3
--- Version:     2017-09-16
+-- Version:     2017-09-27
 -- Description: Generates SQL scripts for objects with SQL definitions.
 --              Specifically views, sprocs, and user defined funcs.
 --              Mimics SSMS scripting behavior.
@@ -14,12 +14,16 @@ go
 --                  - DROP
 --                  - DROP AND CREATE
 --                  - CREATE OR ALTER
+--              @format nvarchar(100): Defines the output format
+--                  - "SSMS": generates code to match SSMS
+--                  - "Generate Scripts": Matches "Tasks, Generate Scripts" format
 --------------------------------------------------------------------------------
 create or alter proc [dbo].[script_definition]
     @database_name nvarchar(128)
     ,@script_type nvarchar(100)
     ,@object_schema nvarchar(128) = null
     ,@object_name nvarchar(128) = null
+    ,@format nvarchar(100) = null
     ,@tab_replacement varchar(10) = null
 as
 begin
@@ -38,6 +42,10 @@ if @script_type not in ('CREATE', 'DROP', 'DROP AND CREATE', 'CREATE OR ALTER') 
 end
 
 set @tab_replacement = isnull(@tab_replacement, char(9))
+
+if @format is null or @format not in ('SSMS', 'Generate Scripts') begin
+    set @format = 'SSMS'
+end
 
 declare @sql nvarchar(max)
       , @has_drop bit = 0
@@ -90,15 +98,24 @@ select so.object_id as object_id
      , case when so.type in (''V'', ''P'', ''FN'', ''TF'', ''IF'') then ''SQL''
             else ''EXTERNAL''
        end as object_language
+into ##__script_definition__39609F__
 from sys.objects so
 left join sys.sql_modules sm
   on sm.object_id = so.object_id
 where so.type in (''V'', ''P'', ''FN'', ''TF'', ''IF'', ''AF'', ''FT'', ''IS'', ''PC'', ''FS'')
+and so.is_ms_shipped = 0
+and so.name not in (''fn_diagramobjects'', ''sp_alterdiagram'', ''sp_creatediagram'', ''sp_dropdiagram'', ''sp_helpdiagramdefinition'', ''sp_helpdiagrams'', ''sp_renamediagram'', ''sp_upgraddiagrams'', ''sysdiagrams'')
 order by 1, 2, 3
 '
 
-insert into @defs
+-- Really hate to use a global temp table here, but an INSERT-EXEC cannot be
+-- nested, which means that whomever calls this proc is not going to be able
+-- to use that technique, and that is too handy to waste doing it here.
+drop table if exists ##__script_definition__39609F__
 exec sp_executesql @sql
+insert into @defs
+select * from ##__script_definition__39609F__
+drop table if exists ##__script_definition__39609F__
 
 -- whittle down
 delete from @defs
@@ -127,29 +144,53 @@ declare @result table (
 
 
 -- header ======================================================================
-insert into @result (
-    object_catalog
-    ,object_schema
-    ,object_name
-    ,object_type
-    ,seq
-    ,ddl
-)
-select
-    a.object_catalog
-    ,a.object_schema
-    ,a.object_name
-    ,a.object_type
-    ,100000000 + b.seq
-    ,case b.seq
-        when 1 then 'USE ' + quotename(a.object_catalog)
-        when 2 then 'GO'
-        when 3 then ''
-    end as ddl
-from @defs a
-cross apply (select 1 as seq union
-             select 2 union
-             select 3) b
+if @format = 'Generate Scripts' begin
+    insert into @result (
+        object_catalog
+        ,object_schema
+        ,object_name
+        ,object_type
+        ,seq
+        ,ddl
+    )
+    select
+        '' as object_catalog
+        ,'' as object_schema
+        ,'' as object_name
+        ,'' as object_type
+        ,0
+        ,case b.seq
+            when 1 then 'USE ' + quotename(@database_name)
+            when 2 then 'GO'
+        end as ddl
+    from (select 1 as seq union
+          select 2) b
+end
+else begin
+    insert into @result (
+        object_catalog
+        ,object_schema
+        ,object_name
+        ,object_type
+        ,seq
+        ,ddl
+    )
+    select
+        a.object_catalog
+        ,a.object_schema
+        ,a.object_name
+        ,a.object_type
+        ,100000000 + b.seq
+        ,case b.seq
+            when 1 then 'USE ' + quotename(a.object_catalog)
+            when 2 then 'GO'
+            when 3 then ''
+        end as ddl
+    from @defs a
+    cross apply (select 1 as seq union
+                 select 2 union
+                 select 3) b
+end
 
 
 -- drops =======================================================================
@@ -306,7 +347,7 @@ if @has_definition = 1 begin
 end
 
 -- Fix the create statement ====================================================
-if @script_type in ('alter', 'create or alter') begin
+if @script_type in ('create', 'alter', 'create or alter') begin
     ;with cte as (
         select *
              , row_number() over (partition by object_schema, object_name
@@ -319,8 +360,17 @@ if @script_type in ('alter', 'create or alter') begin
         where create_idx > 0
     )
     update cte
-    set ddl = stuff(ddl, create_idx, 6, @script_type)
+    set ddl = replace(stuff(ddl, create_idx, 6, @script_type), object_schema + '.' + object_name, quotename(object_schema) + '.' + quotename(object_name))
     where rn = 1
+end
+
+
+-- Clean up based on formatting
+if @format = 'Generate Scripts' begin
+    -- remove blank lines
+    delete from @result
+    where seq / 100000000 in (3, 8)
+    and ddl = ''
 end
 
 -- Return the result data ======================================================
