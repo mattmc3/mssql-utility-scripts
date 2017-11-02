@@ -3,27 +3,35 @@ go
 --------------------------------------------------------------------------------
 -- Proc:        script_definition
 -- Author:      mattmc3
--- Version:     2017-09-27
+-- Version:     2017-11-01
 -- Description: Generates SQL scripts for objects with SQL definitions.
 --              Specifically views, sprocs, and user defined funcs.
 --              Mimics SSMS scripting behavior.
 -- Params:      @database_name nvarchar(128): Name of the database
---              @script_type nvarchar(100): The type of script to generate:
+--              @object_type nvarchar(100): The type of script to generate:
+--                  - ALL (<NULL>)
+--                  - VIEW
+--                  - PROCEDURE
+--                  - FUNCTION
+--              @create_or_alter_header nvarchar(100): The header syntax:
 --                  - CREATE
 --                  - ALTER
 --                  - DROP
 --                  - DROP AND CREATE
 --                  - CREATE OR ALTER
 --              @format nvarchar(100): Defines the output format
---                  - "SSMS": generates code to match SSMS
---                  - "Generate Scripts": Matches "Tasks, Generate Scripts" format
+--                  - 'Generate Scripts': Matches "Tasks, Generate Scripts"
+--                  - 'SSMS Object Explorer': generates code to match SSMS
+--                    format
 --------------------------------------------------------------------------------
 create or alter proc [dbo].[script_definition]
     @database_name nvarchar(128)
-    ,@script_type nvarchar(100)
+    ,@object_type nvarchar(100) = null
+    ,@create_or_alter_header nvarchar(100) = 'CREATE OR ALTER'
     ,@object_schema nvarchar(128) = null
     ,@object_name nvarchar(128) = null
     ,@format nvarchar(100) = null
+    ,@include_header_comment bit = 1
     ,@tab_replacement varchar(10) = null
 as
 begin
@@ -32,34 +40,38 @@ set nocount on
 
 -- Temporarily uncomment for inline testing
 --declare @database_name nvarchar(128) = 'master'
---      , @script_type nvarchar(100) = 'drop and create'
+--      , @create_or_alter_header nvarchar(100) = 'drop and create'
 --      , @object_schema nvarchar(128) = null
 --      , @object_name nvarchar(128) = null
 
-if @script_type not in ('CREATE', 'DROP', 'DROP AND CREATE', 'CREATE OR ALTER') begin
-    raiserror('The @script_type values supported are ''CREATE'', ''DROP'', ''DROP AND CREATE'', and ''CREATE OR ALTER''', 16, 10)
+set @create_or_alter_header = isnull(@create_or_alter_header, 'CREATE')
+set @object_type = isnull(@object_type, 'ALL')
+
+if @create_or_alter_header not in ('CREATE', 'DROP', 'DROP AND CREATE', 'CREATE OR ALTER') begin
+    raiserror('The @create_or_alter_header values supported are ''CREATE'', ''DROP'', ''DROP AND CREATE'', and ''CREATE OR ALTER''', 16, 10)
     return
 end
 
 set @tab_replacement = isnull(@tab_replacement, char(9))
 
-if @format is null or @format not in ('SSMS', 'Generate Scripts') begin
-    set @format = 'SSMS'
+if @format is null or @format not in ('SSMS Object Explorer', 'Generate Scripts') begin
+    set @format = 'Generate Scripts'
 end
 
 declare @sql nvarchar(max)
       , @has_drop bit = 0
       , @has_definition bit = 1
+      , @now datetime = getdate()
 
 if @object_name is not null begin
     set @object_schema = isnull(@object_schema, 'dbo')
 end
 
-if @script_type in ('drop', 'drop and create') begin
+if @create_or_alter_header in ('drop', 'drop and create') begin
     set @has_drop = 1
 end
 
-if @script_type in ('drop') begin
+if @create_or_alter_header in ('drop') begin
     set @has_definition = 0  -- false
 end
 
@@ -80,47 +92,76 @@ declare @defs table (
     ,object_language varchar(10) not null
 )
 
-set @sql = 'use ' + quotename(@database_name) + '
-select so.object_id as object_id
-     , db_name() as object_catalog
-     , schema_name(so.schema_id) as object_schema
-     , so.name as object_name
-     , quotename(schema_name(so.schema_id)) + ''.'' + quotename(so.name) as quoted_name
-     , sm.definition as object_definition
-     , sm.uses_ansi_nulls
-     , sm.uses_quoted_identifier
-     , sm.is_schema_bound
-     , so.type as object_type_code
-     , case when so.type in (''V'') then ''VIEW''
-            when so.type in (''P'', ''PC'') then ''PROCEDURE''
-            else ''FUNCTION''
-       end as object_type
-     , case when so.type in (''V'', ''P'', ''FN'', ''TF'', ''IF'') then ''SQL''
-            else ''EXTERNAL''
-       end as object_language
-into ##__script_definition__39609F__
-from sys.objects so
-left join sys.sql_modules sm
-  on sm.object_id = so.object_id
-where so.type in (''V'', ''P'', ''FN'', ''TF'', ''IF'', ''AF'', ''FT'', ''IS'', ''PC'', ''FS'')
-and so.is_ms_shipped = 0
-and so.name not in (''fn_diagramobjects'', ''sp_alterdiagram'', ''sp_creatediagram'', ''sp_dropdiagram'', ''sp_helpdiagramdefinition'', ''sp_helpdiagrams'', ''sp_renamediagram'', ''sp_upgraddiagrams'', ''sysdiagrams'')
-order by 1, 2, 3
-'
+declare @c cursor
+      , @dbname nvarchar(128)
+set @c = cursor local fast_forward for
+    select d.name
+    from sys.databases d
+    where d.name = @database_name
+    or (
+        @database_name is null
+        and d.name not in (
+            'master'
+            ,'tempdb'
+            ,'model'
+            ,'msdb'
+            ,'DWDiagnostics'
+            ,'DWConfiguration'
+            ,'DWQueue'
+        )
+    )
 
--- Really hate to use a global temp table here, but an INSERT-EXEC cannot be
--- nested, which means that whomever calls this proc is not going to be able
--- to use that technique, and that is too handy to waste doing it here.
-drop table if exists ##__script_definition__39609F__
-exec sp_executesql @sql
-insert into @defs
-select * from ##__script_definition__39609F__
-drop table if exists ##__script_definition__39609F__
+open @c
+fetch next from @c into @dbname
+while @@fetch_status = 0 begin
+    set @sql = 'use ' + quotename(@dbname) + '
+    select so.object_id as object_id
+         , db_name() as object_catalog
+         , schema_name(so.schema_id) as object_schema
+         , so.name as object_name
+         , quotename(schema_name(so.schema_id)) + ''.'' + quotename(so.name) as quoted_name
+         , sm.definition as object_definition
+         , sm.uses_ansi_nulls
+         , sm.uses_quoted_identifier
+         , sm.is_schema_bound
+         , so.type as object_type_code
+         , case when so.type in (''V'') then ''VIEW''
+                when so.type in (''P'', ''PC'') then ''PROCEDURE''
+                else ''FUNCTION''
+           end as object_type
+         , case when so.type in (''V'', ''P'', ''FN'', ''TF'', ''IF'') then ''SQL''
+                else ''EXTERNAL''
+           end as object_language
+    into ##__script_definition__39609F__
+    from sys.objects so
+    left join sys.sql_modules sm
+      on sm.object_id = so.object_id
+    where so.type in (''V'', ''P'', ''FN'', ''TF'', ''IF'', ''AF'', ''FT'', ''IS'', ''PC'', ''FS'')
+    and so.is_ms_shipped = 0
+    and so.name not in (''fn_diagramobjects'', ''sp_alterdiagram'', ''sp_creatediagram'', ''sp_dropdiagram'', ''sp_helpdiagramdefinition'', ''sp_helpdiagrams'', ''sp_renamediagram'', ''sp_upgraddiagrams'', ''sysdiagrams'')
+    order by 1, 2, 3
+    '
 
--- whittle down
-delete from @defs
-where (@object_schema is not null and object_schema <> @object_schema)
-or (@object_name is not null and object_name <> @object_name)
+    -- Really hate to use a global temp table here, but an INSERT-EXEC cannot be
+    -- nested, which means that whomever calls this proc is not going to be able
+    -- to use that technique, and that is too handy to waste doing it here.
+    drop table if exists ##__script_definition__39609F__
+    exec sp_executesql @sql
+    insert into @defs
+    select * from ##__script_definition__39609F__
+    drop table if exists ##__script_definition__39609F__
+
+    -- whittle down
+    delete from @defs
+    where (@object_schema is not null and object_schema <> @object_schema)
+    or (@object_name is not null and object_name <> @object_name)
+
+    fetch next from @c into @dbname
+end
+
+-- Clean up cursor
+close @c
+deallocate @c
 
 -- standardize on newlines for split
 update @defs
@@ -145,6 +186,7 @@ declare @result table (
 
 -- header ======================================================================
 if @format = 'Generate Scripts' begin
+    -- just one database
     insert into @result (
         object_catalog
         ,object_schema
@@ -154,17 +196,18 @@ if @format = 'Generate Scripts' begin
         ,ddl
     )
     select
-        '' as object_catalog
+        a.object_catalog
         ,'' as object_schema
         ,'' as object_name
         ,'' as object_type
         ,0
         ,case b.seq
-            when 1 then 'USE ' + quotename(@database_name)
+            when 1 then 'USE ' + quotename(a.object_catalog)
             when 2 then 'GO'
         end as ddl
-    from (select 1 as seq union
-          select 2) b
+    from (select distinct object_catalog from @defs) a
+    cross apply (select 1 as seq union
+                 select 2) b
 end
 else begin
     insert into @result (
@@ -209,17 +252,18 @@ if @has_drop = 1 begin
         ,a.object_name
         ,a.object_type
         ,200000000 + b.seq
-        ,case b.seq
-            when 1 then '/****** Object:  ' +
+        ,case
+            when b.seq = 1 and @include_header_comment = 1 then '/****** Object:  ' +
                 case a.object_type
                     when 'VIEW' then 'View'
                     when 'PROCEDURE' then 'StoredProcedure'
                     when 'FUNCTION' then 'UserDefinedFunction'
                     else ''
-                end + ' ' + a.quoted_name + '    Script Date: ' + format(getdate(), 'M/d/yyyy h:mm:ss tt') + ' ******/'
-            when 2 then 'DROP ' + a.object_type + ' ' + a.quoted_name
-            when 3 then 'GO'
-            when 4 then ''
+                end + ' ' + a.quoted_name + '    Script Date: ' + format(@now, 'M/d/yyyy h:mm:ss tt') + ' ******/'
+            when b.seq = 2 then 'DROP ' + a.object_type + ' ' + a.quoted_name
+            when b.seq = 3 then 'GO'
+            when b.seq = 4 then ''
+            else null
         end as ddl
     from @defs a
     cross apply (select 1 as seq union
@@ -248,7 +292,7 @@ if @has_definition = 1 begin
             ,start_idx
             ,end_idx
         )
-        select 
+        select
             d.object_id
             ,@seq as seq
             ,isnull(p.end_idx, 0) + 1 as start_idx
@@ -299,20 +343,21 @@ if @has_definition = 1 begin
         ,a.object_name
         ,a.object_type
         ,300000000 + b.seq
-        ,case b.seq
-            when 1 then '/****** Object:  ' +
+        ,case
+            when b.seq = 1 and @include_header_comment = 1 then '/****** Object:  ' +
                 case a.object_type
                     when 'VIEW' then 'View'
                     when 'PROCEDURE' then 'StoredProcedure'
                     when 'FUNCTION' then 'UserDefinedFunction'
                     else ''
-                end + ' ' + a.quoted_name + '    Script Date: ' + format(getdate(), 'M/d/yyyy h:mm:ss tt') + ' ******/'
-            when 2 then 'SET ANSI_NULLS ON'
-            when 3 then 'GO'
-            when 4 then ''
-            when 5 then 'SET QUOTED_IDENTIFIER ON'
-            when 6 then 'GO'
-            when 7 then ''
+                end + ' ' + a.quoted_name + '    Script Date: ' + format(@now, 'M/d/yyyy h:mm:ss tt') + ' ******/'
+            when b.seq = 2 then 'SET ANSI_NULLS ' + case when a.uses_ansi_nulls = 1 then 'ON' else 'OFF' end
+            when b.seq = 3 then 'GO'
+            when b.seq = 4 then ''
+            when b.seq = 5 then 'SET QUOTED_IDENTIFIER ' + case when a.uses_quoted_identifier = 1 then 'ON' else 'OFF' end
+            when b.seq = 6 then 'GO'
+            when b.seq = 7 then ''
+            else null
         end as ddl
         from @defs a
         cross apply (select 1 as seq union
@@ -347,20 +392,28 @@ if @has_definition = 1 begin
 end
 
 -- Fix the create statement ====================================================
-if @script_type in ('create', 'alter', 'create or alter') begin
+if @create_or_alter_header in ('create', 'alter', 'create or alter') begin
     ;with cte as (
         select *
              , row_number() over (partition by object_schema, object_name
                                   order by seq) as rn
         from (
             select *
-                 , patindex('%create%' + case when object_type = 'PROCEDURE' then 'PROC' else object_type end + '%' + object_schema + '%.%' + object_name + '%', ddl) as create_idx
+                 , patindex('%create%' +
+                   case when object_type = 'PROCEDURE' then 'PROC'
+                        else object_type
+                   end + '%' + object_schema + '%.%' + object_name + '%', ddl) as create_idx
             from @result
         ) a
         where create_idx > 0
     )
     update cte
-    set ddl = replace(stuff(ddl, create_idx, 6, @script_type), object_schema + '.' + object_name, quotename(object_schema) + '.' + quotename(object_name))
+    set ddl = replace(case when ascii(left(ltrim(substring(ddl, create_idx + 6, 8000)), 1)) between 97 and 122
+                           then lower(@create_or_alter_header)
+                           else @create_or_alter_header
+                      end + ' ' + ltrim(substring(ddl, create_idx + 6, 8000))
+                      ,object_schema + '.' + object_name
+                      ,quotename(object_schema) + '.' + quotename(object_name))
     where rn = 1
 end
 
@@ -374,9 +427,15 @@ if @format = 'Generate Scripts' begin
 end
 
 -- Return the result data ======================================================
+delete from @result
+where ddl is null
+
 select *
 from @result r
-order by 1, 2, 3, 4, 5
+where r.object_type = @object_type
+or @object_type = 'ALL'
+order by 4, 1, 2, 3, 5
 
 end
+
 go
