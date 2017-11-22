@@ -179,12 +179,13 @@ group by a.object_id, a.index_id
 
 drop table if exists #new
 select i.*
-     , case when i.is_primary_key = 1 then 'pk_'
+     , cast(
+       case when i.is_primary_key = 1 then 'pk_'
             when i.is_unique_constraint = 1 then 'un_'
             when i.is_unique = 1 then 'ux_'
             when i.type = 1 then 'cx_'
             else 'ix_'
-       end as prefix
+       end as nvarchar(50)) as prefix
      , case when i.is_primary_key = 1 then i.table_name + '__'
             when i.is_unique_constraint = 1 then i.table_name + '__'
             else ''
@@ -205,9 +206,10 @@ select i.*
         isnull('__' + pc.index_column14, '') +
         isnull('__' + pc.index_column15, '') +
         isnull('__' + pc.index_column16, '') as new_index_name
-     , cast(case when inc.included_cols_count is null then ''
+     , cast(
+       case when inc.included_cols_count is null then ''
             else '__inc' + cast(inc.included_cols_count as varchar(5))
-       end as varchar(50)) as suffix
+       end as nvarchar(50)) as suffix
      ,cast(null as sysname) as new_index_fullname
 into #new
 from #idx i
@@ -232,7 +234,7 @@ set new_index_name = left(new_index_name, 128 - len(prefix) - len(suffix))
     from #new
 )
 update cte
-set suffix = suffix + '__' + cast(rn as varchar(10))
+set prefix = stuff(prefix, 3, 0, cast(rn as varchar(10)))
 where rn > 1
 
 -- fix length to fit 128 chars again
@@ -254,7 +256,7 @@ into #instructions
 from #new n
 
 if @dry_run = 1 begin
-    select *
+    select @dbname, *
     from #instructions
     order by table_schema, table_name, new_index_fullname
 
