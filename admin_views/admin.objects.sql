@@ -1,10 +1,11 @@
-create or alter view admin.object_info as
+create or alter view admin.objects as
 --------------------------------------------------------------------------------
 -- Author: mattmc
 -- Ver: v1.0.0
 -- Description: enhanced version of sysobjects
 --------------------------------------------------------------------------------
 select so.object_id
+     , db_name() as db_name
      , so.schema_id
      , schema_name(so.schema_id) as schema_name
      , so.name as object_name

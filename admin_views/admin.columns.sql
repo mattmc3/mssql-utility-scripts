@@ -1,4 +1,4 @@
-create or alter view admin.column_info as
+create or alter view admin.columns as
 --------------------------------------------------------------------------------
 -- Author: mattmc
 -- Ver: v1.0.0
@@ -6,7 +6,7 @@ create or alter view admin.column_info as
 -- Notes: start with sp_helptext 'information_schema.columns'
 --------------------------------------------------------------------------------
 select
-    *
+    t.*
     ,t.data_type +
      case
         when t.data_type in ('binary', 'char', 'nchar', 'nvarchar', 'varbinary', 'varchar')
@@ -21,14 +21,13 @@ select
 from (
     select top 2147483647
         o.object_id as object_id
-        ,c.column_id as column_id
         ,db_name() as db_name
+        ,o.schema_id
         ,schema_name(o.schema_id) as schema_name
         ,o.name as table_name
-        ,case o.type
-            when 'U' then 'TABLE'
-            when 'V' then 'VIEW'
-        end as table_type
+        ,o.[type] as type_code
+        ,o.type_desc
+        ,c.column_id as column_id
         ,c.name as column_name
         ,columnproperty(c.object_id, c.name, 'ordinal') as ordinal_position
         ,convert(nvarchar(4000), object_definition(c.default_object_id)) as column_default
