@@ -22,7 +22,7 @@ from (
         ,so.name as table_name
         ,convert(nvarchar(1000), quotename(ss.name) + '.' + quotename(so.name)) as quoted_name
         ,so.[type] as type_code
-        ,so.type_desc
+        ,so.type_desc as table_type
         ,so.create_date
         ,so.modify_date
         ,isnull(filegroup_name(st.filestream_data_space_id), 'PRIMARY') as file_group

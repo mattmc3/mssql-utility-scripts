@@ -26,7 +26,7 @@ from (
         ,schema_name(o.schema_id) as schema_name
         ,o.name as table_name
         ,o.[type] as type_code
-        ,o.type_desc
+        ,o.type_desc as table_type
         ,c.column_id as column_id
         ,c.name as column_name
         ,columnproperty(c.object_id, c.name, 'ordinal') as ordinal_position

@@ -12,7 +12,7 @@ select so.object_id
      , convert(nvarchar(1000), quotename(schema_name(so.schema_id)) + '.' + quotename(so.name)) as quoted_name
      , so.parent_object_id
      , so.[type] as type_code
-     , so.type_desc
+     , so.type_desc as object_type
      , so.create_date
      , so.modify_date
      , so.is_ms_shipped
