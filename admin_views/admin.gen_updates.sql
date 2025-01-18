@@ -9,9 +9,9 @@ from (
     -- table level
     select tab.db_name
          , tab.object_id
+         , tab.table_type
          , tab.schema_name
          , tab.table_name
-         , tab.table_type
          , 1000000 * num.val as seq
          , case num.val
                 when 1 then 'UPDATE ' + tab.quoted_name
@@ -28,9 +28,9 @@ from (
     union
     select col.db_name
          , col.object_id
+         , col.table_type
          , col.schema_name
          , col.table_name
-         , col.table_type
          , 2000000 + col.ordinal_position - 1 as seq
          , space(3) +
            case when col.ordinal_rank = 1 then 'SET ' else space(3) + ',' end +
