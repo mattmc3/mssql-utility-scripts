@@ -2,12 +2,11 @@ create or alter view admin.gen_drops as
 --------------------------------------------------------------------------------
 -- Author: mattmc
 -- Ver: v1.0.0
--- Description: Generate object drops
+-- Description: Generate DROP statements for objects
 --------------------------------------------------------------------------------
-select a.*
+select top 2147483647 *
 from (
-    select top 2147483647
-        obj.db_name
+    select obj.db_name
         ,obj.object_id
         ,obj.object_type
         ,obj.schema_name
@@ -25,6 +24,6 @@ from (
     from admin.objects obj
     where obj.type_code in ('U', 'V', 'P', 'FN', 'IF')
     and obj.is_builtin = 0
-    order by object_type, schema_name, object_name, seq
 ) a
+order by object_type, schema_name, object_name, seq
 go
