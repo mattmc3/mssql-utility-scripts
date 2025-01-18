@@ -3,8 +3,7 @@ create or alter view [admin].[table_info] as
 -- Author: mattmc
 -- Ver: v1.0.0
 -- Description: enhanced version of information_schema.tables
--- Notes: start with sp_helptext 'information_schema.tables' in the master
---        db and enhance from there.
+-- Notes: start with sp_helptext 'information_schema.tables'
 --------------------------------------------------------------------------------
 with rowcounts as (
     select st.object_id
